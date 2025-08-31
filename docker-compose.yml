@@ -1,0 +1,61 @@
+services:
+  zookeeper:
+    image: bitnami/zookeeper:3.9
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    ports: [ "2181:2181" ]
+    volumes: [ "zookeeper_data:/bitnami/zookeeper" ]
+    restart: unless-stopped
+
+  kafka:
+    image: bitnami/kafka:3.7
+    depends_on: [ zookeeper ]
+    ports:
+      - "9092:9092" # internal (containers)
+      - "9093:9093" # external (host)
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CFG_LISTENERS=INTERNAL://:9092,EXTERNAL://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=INTERNAL://kafka:9092,EXTERNAL://localhost:9093
+      - KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    volumes: [ "kafka_data:/bitnami/kafka" ]
+    healthcheck:
+      test: [ "CMD", "/opt/bitnami/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  kafdrop:
+    image: obsidiandynamics/kafdrop:latest
+    depends_on: [ kafka ]
+    ports: [ "9000:9000" ]
+    environment:
+      - KAFKA_BROKERCONNECT=kafka:9092
+      - JVM_OPTS=-Xms128m -Xmx512m
+    restart: unless-stopped
+
+  swap-coldkey-monitor:
+    build:
+      context: swap_coldkey_monitor
+      dockerfile: Dockerfile
+    image: swap-coldkey-monitor:latest
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - subtensor_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=signal
+      - KAFKA_PARTITIONING=signal
+      - PYTHONUNBUFFERED=1
+    init: true
+    restart: always
+
+volumes:
+  zookeeper_data:
+  kafka_data:

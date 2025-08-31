@@ -1,0 +1,56 @@
+from utils import configure_logging
+import os
+import websockets
+import time
+from bittensor.core.async_subtensor import get_async_subtensor
+import asyncio
+import bittensor as bt
+
+from monitor import SwapColdkeyMonitor
+from kafka_producer import KafkaProducerManager
+from utils import configure_logging
+
+
+async def main():
+    """
+    Main entry point: configure logging, connect to subtensor, and start monitoring.
+    """
+    configure_logging()
+    ENDPOINT = os.getenv(
+        "subtensor_ENDPOINT", "wss://entrypoint-finney.opentensor.ai:443"
+    )
+    subtensor = await get_async_subtensor(network=ENDPOINT, log_verbose=True)
+
+    KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9093")
+    KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "signal")
+    producer = KafkaProducerManager(
+        bootstrap_servers=KAFKA_BOOTSTRAP,
+        topic=KAFKA_TOPIC,
+        client_id="swap-coldkey-monitor",
+    )
+    await producer.start()
+
+    try:
+        monitor = SwapColdkeyMonitor(subtensor, producer)
+        async with websockets.connect(ENDPOINT) as ws:
+            await monitor.subscribe_new_heads(ws)
+    finally:
+        await producer.stop()
+
+
+if __name__ == "__main__":
+    while True:
+        try:
+            asyncio.run(main())
+            break
+
+        except KeyboardInterrupt:
+            bt.logging.info("👋 Monitoring stopped by user")
+            break
+
+        except Exception:
+            bt.logging.error(
+                "❌ Script terminated with an unexpected error:", exc_info=True
+            )
+            bt.logging.info("⏳ Restarting in 5 seconds...")
+            time.sleep(5)
