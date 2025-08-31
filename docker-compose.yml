@@ -11,8 +11,8 @@ services:
     image: bitnami/kafka:3.7
     depends_on: [ zookeeper ]
     ports:
-      - "9092:9092" # internal (containers)
-      - "9093:9093" # external (host)
+      - "9092:9092" # INTERNAL (dla kontenerów)
+      - "9093:9093" # EXTERNAL (dla hosta)
     environment:
       - KAFKA_BROKER_ID=1
       - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
@@ -21,7 +21,12 @@ services:
       - KAFKA_CFG_LISTENERS=INTERNAL://:9092,EXTERNAL://:9093
       - KAFKA_CFG_ADVERTISED_LISTENERS=INTERNAL://kafka:9092,EXTERNAL://localhost:9093
       - KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
+      - KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR=1
       - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_GROUP_INITIAL_REBALANCE_DELAY_MS=0
+      - KAFKA_CFG_OFFSETS_TOPIC_NUM_PARTITIONS=50
     volumes: [ "kafka_data:/bitnami/kafka" ]
     healthcheck:
       test: [ "CMD", "/opt/bitnami/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list" ]
