@@ -9,9 +9,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY swap_coldkey_monitor ./swap_coldkey_monitor
+COPY src ./src
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python3",  "swap_coldkey_monitor/main.py"]
+CMD ["python3",  "src/main.py"]
 
