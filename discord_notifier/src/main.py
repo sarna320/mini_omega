@@ -20,8 +20,9 @@ async def main():
     group_id = os.getenv("KAFKA_GROUP_ID", "discord")
     webhook = os.getenv(
         "DISCORD_WEBHOOK_URL",
-        "https://discord.com/api/webhooks/1411814256646819944/xONggF8pZAP0SuVkn3Wv0vwdQ977tqOr10Hj_GBSBJ_4S7WVCeC6axcbtidEjb9nnCFc",
+        "https://discord.com/api/webhooks/xxx/xxxx",
     )
+    test_mode = os.getenv("TEST_MODE", "True").strip().lower() == "true"
     if not webhook:
         raise RuntimeError("DISCORD_WEBHOOK_URL is required")
 
@@ -30,6 +31,7 @@ async def main():
         topic=topic,
         group_id=group_id,
         webhook_url=webhook,
+        test_mode=test_mode,
     )
 
     loop = asyncio.get_running_loop()

@@ -26,6 +26,7 @@ class KafkaDiscordNotifier:
         topic: str,
         group_id: str,
         webhook_url: str,
+        test_mode: bool = True,
         *,
         client_id: str = "discord-notifier",
         formatter: Callable[[Dict[str, Any]], Dict[str, Any]] = default_formatter,
@@ -39,6 +40,7 @@ class KafkaDiscordNotifier:
         self.group_id = group_id
         self.client_id = client_id
         self.webhook_url = webhook_url
+        self.test_mode = test_mode
         self.formatter = formatter
         self._session = session
         self._own_session = session is None
@@ -196,18 +198,20 @@ class KafkaDiscordNotifier:
                 raise ValueError(
                     "Formatter must return a dict with a valid Discord payload"
                 )
-            # bt.logging.info(discord_payload)
-            success, err = await self._post_webhook(discord_payload)
-            if success:
-                bt.logging.info(
-                    f"✅ Delivered to Discord (partition={partition}, offset={offset}, key={key!r}) | {discord_payload}"
-                )
-                return True
+            if self.test_mode:
+                bt.logging.info(discord_payload)
             else:
-                bt.logging.error(
-                    f"❌ Delivery to Discord failed permanently for offset={offset}, key={key!r}: {err}| {discord_payload}"
-                )
-                return False
+                success, err = await self._post_webhook(discord_payload)
+                if success:
+                    bt.logging.info(
+                        f"✅ Delivered to Discord (partition={partition}, offset={offset}, key={key!r}) | {discord_payload}"
+                    )
+                    return True
+                else:
+                    bt.logging.error(
+                        f"❌ Delivery to Discord failed permanently for offset={offset}, key={key!r}: {err}| {discord_payload}"
+                    )
+                    return False
         except Exception as e:
             bt.logging.exception(
                 f"❌ Exception while handling message offset={offset}, key={key!r}: {e}"
@@ -259,8 +263,9 @@ async def main():
     group_id = os.getenv("KAFKA_GROUP_ID", "discord")
     webhook = os.getenv(
         "DISCORD_WEBHOOK_URL",
-        "https://discord.com/api/webhooks/1411814256646819944/xONggF8pZAP0SuVkn3Wv0vwdQ977tqOr10Hj_GBSBJ_4S7WVCeC6axcbtidEjb9nnCFc",
+        "https://discord.com/api/webhooks/xxx/xxxx",
     )
+    test_mode = os.getenv("TEST_MODE", "True").strip().lower() == "true"
     if not webhook:
         raise RuntimeError("DISCORD_WEBHOOK_URL is required")
 
@@ -269,6 +274,7 @@ async def main():
         topic=topic,
         group_id=group_id,
         webhook_url=webhook,
+        test_mode=test_mode,
     )
 
     loop = asyncio.get_running_loop()

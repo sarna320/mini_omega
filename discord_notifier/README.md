@@ -1,5 +1,5 @@
 ```sh
 python3 -m venv .venv
 pip install -r requirements.txt
-python -m discord_notifier/main.py
+python -m src/main.py
 ```
