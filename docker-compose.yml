@@ -75,6 +75,7 @@ services:
       - KAFKA_GROUP_ID=discord
       - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1411814256646819944/xONggF8pZAP0SuVkn3Wv0vwdQ977tqOr10Hj_GBSBJ_4S7WVCeC6axcbtidEjb9nnCFc
       - PYTHONUNBUFFERED=1
+      - TEST_MODE=False
     init: true
     restart: always
 
