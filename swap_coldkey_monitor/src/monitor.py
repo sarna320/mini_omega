@@ -10,6 +10,7 @@ from bittensor import DynamicInfo
 from extrinsic import process_call_args
 from kafka_producer import KafkaProducerManager
 from utils import now_iso_utc
+from calls import ACCEPTABLE_CALLS
 
 
 class SwapColdkeyMonitor:
@@ -43,12 +44,16 @@ class SwapColdkeyMonitor:
         #     return
 
         for p in parsed:
+            type_ext = p.get("type", "unknow")
+            # double check
+            if type_ext not in ACCEPTABLE_CALLS:
+                continue
             new_coldkey = p.get("new_coldkey", "not_found")
             bt.logging.info(f"{coldkey} extrinsic: {p}")
 
             payload = {
                 "netuid": netuid,
-                "type": "schedule_swap_coldkey",
+                "type": type_ext,
                 "observed_at": now_iso_utc(),
                 "block": self.current_block,
                 "coldkey": coldkey,

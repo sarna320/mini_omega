@@ -53,6 +53,9 @@ def process_batch(call_args):
         for call in calls:
             # bt.logging.info(f"process_batch decoding call in calls: {call}")
             call_function = call.get("call_function")
+            if call_function not in ACCEPTABLE_CALLS:
+                # bt.logging.info(f"Call_function: {call_function} not in {ACCEPTABLE_CALLS}")
+                continue
             # bt.logging.info(f"call_function: {call_function}")
             call_args = call.get("call_args")
             # bt.logging.info(f"call_args: {call_args}")
@@ -75,6 +78,9 @@ def procces_proxy(call_args):
     try:
         call = call_args[2].get("value")
         call_function = call.get("call_function")
+        if call_function not in ACCEPTABLE_CALLS:
+            # bt.logging.info(f"Call_function: {call_function} not in {ACCEPTABLE_CALLS}")
+            return None
         call_args = call.get("call_args")
         handler = HANDELER.get(call_function)
         if handler is None:
