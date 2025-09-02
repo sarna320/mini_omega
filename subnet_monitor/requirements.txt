@@ -1,0 +1,2 @@
+bittensor==9.10.0
+aiokafka==0.12.0
