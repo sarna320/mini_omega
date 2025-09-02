@@ -8,8 +8,17 @@ import aiohttp
 import bittensor as bt
 from aiokafka import AIOKafkaConsumer
 from aiokafka.errors import KafkaError
-from aiokafka.admin import AIOKafkaAdminClient, NewTopic  # admin preflight
-from utils import default_formatter, configure_logging, parse_bootstrap
+from aiokafka.admin import AIOKafkaAdminClient, NewTopic
+
+from utils import (
+    configure_logging,
+    default_formatter,
+    parse_bootstrap,
+    schedule_swap_coldkey_formatter,
+    changed_subnet_formatter,
+    added_subnet_formatter,
+    removed_subnet_formatter,
+)
 
 
 class KafkaDiscordNotifier:
@@ -17,7 +26,7 @@ class KafkaDiscordNotifier:
     Consumes JSON messages from Kafka and forwards them to a Discord webhook.
     - Manual offset commit after successful delivery -> at-least-once semantics.
     - Exponential backoff for webhook failures and basic rate-limit handling.
-    - Pluggable message formatter for Discord payloads.
+    - Dispatcher of formatters per event type (payload['event'] or payload['type']).
     """
 
     def __init__(
@@ -30,6 +39,9 @@ class KafkaDiscordNotifier:
         *,
         client_id: str = "discord-notifier",
         formatter: Callable[[Dict[str, Any]], Dict[str, Any]] = default_formatter,
+        event_formatters: Optional[
+            Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]]
+        ] = None,
         session: Optional[aiohttp.ClientSession] = None,
         max_webhook_retries: int = 5,
         webhook_timeout_s: float = 10.0,
@@ -42,6 +54,7 @@ class KafkaDiscordNotifier:
         self.webhook_url = webhook_url
         self.test_mode = test_mode
         self.formatter = formatter
+        self.event_formatters = event_formatters or {}
         self._session = session
         self._own_session = session is None
         self._consumer: Optional[AIOKafkaConsumer] = None
@@ -54,9 +67,8 @@ class KafkaDiscordNotifier:
         self, bootstrap_servers: List[str], partitions: int = 50
     ) -> None:
         """
-        Ensure __consumer_offsets exists (single-broker friendly).
-        Creates it with replication factor = 1 and cleanup.policy=compact if missing.
-        Safe to call on every startup.
+        Ensure __consumer_offsets exists (single-broker friendliness).
+        Safe to call on every startup (no-op if exists).
         """
         admin = AIOKafkaAdminClient(
             bootstrap_servers=",".join(bootstrap_servers),
@@ -64,7 +76,6 @@ class KafkaDiscordNotifier:
         )
         await admin.start()
         try:
-            # Fast path: if it already exists, we're done
             topics = await admin.list_topics()
             if "__consumer_offsets" in topics:
                 bt.logging.debug("ℹ️ __consumer_offsets already exists")
@@ -79,11 +90,9 @@ class KafkaDiscordNotifier:
                 replication_factor=1,
                 topic_configs={"cleanup.policy": "compact"},
             )
-            # Create is idempotent from our perspective; we ignore 'TopicAlreadyExistsError'
             await admin.create_topics([topic], timeout_ms=30)
             bt.logging.info("✅ __consumer_offsets created")
         except Exception as e:
-            # If broker races us and creates it concurrently, we can ignore TopicAlreadyExistsError
             bt.logging.warning(f"ensure_offsets_topic: non-fatal error: {e}")
         finally:
             await admin.close()
@@ -94,7 +103,7 @@ class KafkaDiscordNotifier:
                 timeout=aiohttp.ClientTimeout(total=self.webhook_timeout_s)
             )
 
-        # Preflight: make sure internal offsets topic exists (single-node friendliness)
+        # Preflight (optional)
         await self.ensure_offsets_topic(self.bootstrap_servers, partitions=50)
 
         if self._consumer is None:
@@ -179,7 +188,7 @@ class KafkaDiscordNotifier:
     async def _handle_message(self, record) -> bool:
         """
         Process a single Kafka record.
-        - Build Discord payload with formatter.
+        - Select formatter by payload['event'] or ['type'] (fallback to default_formatter).
         - Send to webhook (with retries).
         - Return True if delivered successfully, else False (so we don't commit).
         """
@@ -193,23 +202,25 @@ class KafkaDiscordNotifier:
         payload = value if isinstance(value, dict) else {"message": value}
 
         try:
-            discord_payload = self.formatter(payload)
+            evt_type = payload.get("type") 
+            formatter = self.event_formatters.get(evt_type, self.formatter)
+            discord_payload = formatter(payload)
             if not isinstance(discord_payload, dict):
-                raise ValueError(
-                    "Formatter must return a dict with a valid Discord payload"
-                )
+                raise ValueError("Formatter must return a dict (Discord payload).")
+
             if self.test_mode:
                 bt.logging.info(discord_payload)
+                return True  # treat as delivered in test mode
             else:
                 success, err = await self._post_webhook(discord_payload)
                 if success:
                     bt.logging.info(
-                        f"✅ Delivered to Discord (partition={partition}, offset={offset}, key={key!r}) | {discord_payload}"
+                        f"✅ Delivered to Discord (partition={partition}, offset={offset}, key={key!r})"
                     )
                     return True
                 else:
                     bt.logging.error(
-                        f"❌ Delivery to Discord failed permanently for offset={offset}, key={key!r}: {err}| {discord_payload}"
+                        f"❌ Delivery to Discord failed permanently for offset={offset}, key={key!r}: {err}"
                     )
                     return False
         except Exception as e:
@@ -219,9 +230,7 @@ class KafkaDiscordNotifier:
             return False
 
     async def run(self):
-        """
-        Main consume loop. Stops when stop() is called or on CancelledError.
-        """
+        """Main consume loop."""
         if self._consumer is None:
             await self.start()
         assert self._consumer is not None
@@ -251,23 +260,29 @@ class KafkaDiscordNotifier:
 
 async def main():
     """
-    Environment variables:
+    Env:
       - KAFKA_BOOTSTRAP (comma-separated). From host use: localhost:9093 ; from container: kafka:9092
       - KAFKA_TOPIC (default: "signal")
       - KAFKA_GROUP_ID (default: "discord")
       - DISCORD_WEBHOOK_URL (required)
+      - TEST_MODE (default: True) -> if True, only logs the Discord payload
     """
     configure_logging()
     bootstrap = os.getenv("KAFKA_BOOTSTRAP", "localhost:9093")
     topic = os.getenv("KAFKA_TOPIC", "signal")
     group_id = os.getenv("KAFKA_GROUP_ID", "discord")
-    webhook = os.getenv(
-        "DISCORD_WEBHOOK_URL",
-        "https://discord.com/api/webhooks/xxx/xxxx",
-    )
+    webhook = os.getenv("DISCORD_WEBHOOK_URL", "")
     test_mode = os.getenv("TEST_MODE", "True").strip().lower() == "true"
-    if not webhook:
-        raise RuntimeError("DISCORD_WEBHOOK_URL is required")
+    if not webhook and not test_mode:
+        raise RuntimeError("DISCORD_WEBHOOK_URL is required when TEST_MODE is False")
+
+    # map event -> formatter
+    event_formatters = {
+        "schedule_swap_coldkey": schedule_swap_coldkey_formatter,
+        "changed_subnet": changed_subnet_formatter,
+        "added_subnet": added_subnet_formatter,
+        "removed_subnet": removed_subnet_formatter,
+    }
 
     notifier = KafkaDiscordNotifier(
         bootstrap_servers=bootstrap,
@@ -275,6 +290,7 @@ async def main():
         group_id=group_id,
         webhook_url=webhook,
         test_mode=test_mode,
+        event_formatters=event_formatters,  # event-specific formatters
     )
 
     loop = asyncio.get_running_loop()
@@ -284,6 +300,7 @@ async def main():
             loop.add_signal_handler(getattr(__import__("signal"), sig), stop_event.set)
         except (NotImplementedError, AttributeError):
             pass
+
     runner = asyncio.create_task(notifier.run())
     try:
         await stop_event.wait()
