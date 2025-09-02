@@ -9,3 +9,8 @@ btcli w regen-coldkey --mnemonic "catalog dial crazy print bracket race text wor
 ```
 
 
+## TODO
+- add redis
+- check for last event, if in window of 2 days skip event else stake, if staked add to redis
+- make check for every type for example swap coldkey alwas but skip new subnet or changes subnet only for name
+- add checks for subnet for example if slippage to high or blaclisted subnet etc. 
