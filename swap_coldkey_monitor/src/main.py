@@ -19,7 +19,7 @@ async def main():
     configure_logging()
 
     ENDPOINT = os.getenv(
-        "subtensor_ENDPOINT",
+        "SUBTENSOR_ENDPOINT",
         "ws://205.172.59.24:9944",
     )
     cfg = Config()

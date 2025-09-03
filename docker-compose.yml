@@ -55,7 +55,7 @@ services:
       kafka:
         condition: service_healthy
     environment:
-      - subtensor_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
+      - SUBTENSOR_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - KAFKA_TOPIC=signal
       - KAFKA_PARTITIONING=signal
@@ -93,7 +93,7 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - KAFKA_TOPIC=signal
       - PYTHONUNBUFFERED=1
-      - subtensor_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
+      - SUBTENSOR_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
     init: true
     restart: always
 
