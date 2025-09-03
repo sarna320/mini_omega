@@ -14,6 +14,7 @@ from utils import (
     removed_subnet_formatter,
 )
 
+
 async def main():
     """
     Env:

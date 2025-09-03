@@ -202,7 +202,7 @@ class KafkaDiscordNotifier:
         payload = value if isinstance(value, dict) else {"message": value}
 
         try:
-            evt_type = payload.get("type") 
+            evt_type = payload.get("type")
             formatter = self.event_formatters.get(evt_type, self.formatter)
             discord_payload = formatter(payload)
             if not isinstance(discord_payload, dict):
