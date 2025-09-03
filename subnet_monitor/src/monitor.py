@@ -122,8 +122,8 @@ class SubnetMonitor:
         current_info_subnets = self.subnets
         new_info_subnets = await self.subtensor.all_subnets()
 
-        # for test
-        new_info_subnets[62].subnet_identity.subnet_name = "62_new"
+        # # for test
+        # new_info_subnets[62].subnet_identity.subnet_name = "62_new"
 
         changes = self.diff_subnet_identity(
             current_info_subnets,

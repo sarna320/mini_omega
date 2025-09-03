@@ -81,6 +81,22 @@ services:
     init: true
     restart: always
 
+  subnet-monitor:
+    build:
+      context: subnet_monitor
+      dockerfile: Dockerfile
+    image: subnet-monitor:latest
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=signal
+      - PYTHONUNBUFFERED=1
+      - subtensor_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
+    init: true
+    restart: always
+
 volumes:
   zookeeper_data:
   kafka_data:
