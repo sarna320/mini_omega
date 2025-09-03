@@ -1,2 +1,3 @@
 bittensor==9.10.0
 aiokafka==0.12.0
+redis==6.4.0

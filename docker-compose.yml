@@ -96,7 +96,15 @@ services:
       - SUBTENSOR_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
     init: true
     restart: always
+  
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: ["redis_data:/data"]
+    restart: unless-stopped
 
 volumes:
   zookeeper_data:
   kafka_data:
+  redis_data:

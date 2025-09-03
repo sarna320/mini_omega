@@ -3,6 +3,7 @@ import asyncio
 from typing import Optional, Any, Dict, Tuple
 from bittensor.core.async_subtensor import AsyncSubtensor
 import bittensor as bt
+import redis.asyncio as aioredis
 
 
 class AutoStaker:
@@ -11,6 +12,9 @@ class AutoStaker:
     - Manages wallet and balance.
     - Validates incoming staking signals (payloads).
     - Executes on-chain 'add_stake' extrinsic using AsyncSubtensor.
+    - Caches last successful trade per netuid in Redis (per wallet).
+    - Skips signals for a netuid if last success happened within a given
+      block spacing window (min_spacing_in_blocks).
     - Provides a background periodic refresh loop.
     """
 
@@ -24,6 +28,8 @@ class AutoStaker:
         balance_to_stake_tao: float = 0.01,
         balance_always_to_keep_tao: float = 0.05,
         max_delay_in_blocks: int = 10,
+        redis_url: Optional[str] = None,
+        min_spacing_in_blocks: int = 50,
     ) -> None:
         self.subtensor = subtensor
         self.test_mode = test_mode
@@ -39,9 +45,62 @@ class AutoStaker:
         self.current_block: Optional[int] = None
         self.max_delay_in_blocks = max_delay_in_blocks
 
+        self.redis: Optional[aioredis.Redis] = (
+            aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
+            if redis_url
+            else None
+        )
+        self.min_spacing_in_blocks = min_spacing_in_blocks
+
         bt.logging.debug(
             f"Using wallet: {self.wallet.name} | ss58: {self.wallet.coldkey.ss58_address}"
         )
+        if self.redis:
+            bt.logging.debug("Redis caching enabled for successful trades.")
+        else:
+            bt.logging.debug("Redis not configured; caching disabled.")
+
+    def _redis_key(self) -> str:
+        """Redis key scoped by wallet coldkey ss58 address."""
+        return f"autostaker:{self.wallet.coldkey.ss58_address}"
+
+    async def _redis_load_map(self) -> Dict[str, Any]:
+        """
+        Load the per-wallet map { "<netuid>": <payload>, ... }.
+        Returns empty dict if missing or Redis disabled.
+        """
+        if not self.redis:
+            return {}
+        s = await self.redis.get(self._redis_key())
+        if not s:
+            return {}
+        try:
+            return json.loads(s)
+        except Exception as e:
+            bt.logging.warning(f"Failed to parse Redis value: {e!r}")
+            return {}
+
+    async def _redis_save_payload(self, netuid: int, payload: Dict[str, Any]) -> None:
+        """Update the per-wallet map, storing the full payload under this netuid."""
+        if not self.redis:
+            return
+        key = self._redis_key()
+        cache = await self._redis_load_map()
+        cache[str(int(netuid))] = payload
+        await self.redis.set(key, json.dumps(cache, ensure_ascii=False))
+
+    async def _last_success_block_for_netuid(self, netuid: int) -> Optional[int]:
+        """
+        Return the 'block' field from last successful payload for a netuid, if any.
+        """
+        cache = await self._redis_load_map()
+        item = cache.get(str(int(netuid)))
+        if not item:
+            return None
+        try:
+            return int(item.get("block"))
+        except Exception:
+            return None
 
     async def refresh_balance(self) -> None:
         """Refresh cached balance from chain."""
@@ -118,6 +177,16 @@ class AutoStaker:
         except Exception:
             return None
 
+    def _parse_netuid_from_payload(self, payload: Dict[str, Any]) -> Optional[int]:
+        """Extract 'netuid' as int; if missing and test_mode=True, default to 0."""
+        netuid = payload.get("netuid")
+        if netuid is None and self.test_mode:
+            return 0
+        try:
+            return int(netuid) if netuid is not None else None
+        except Exception:
+            return None
+
     async def _ensure_current_block(self) -> Optional[int]:
         """Return a known current block, refreshing if needed."""
         if self.current_block is not None:
@@ -141,14 +210,10 @@ class AutoStaker:
           - netuid: Optional[int] network UID to stake on. If missing and test_mode=True, defaults to 0.
           - block: int (used to drop too-old events)
         """
-        # Extract / default netuid
         prev_balance = self.balance_tao
-        netuid = payload.get("netuid")
+        netuid = self._parse_netuid_from_payload(payload)
         if netuid is None:
-            if self.test_mode:
-                netuid = 0
-            else:
-                return False, "Missing 'netuid' in payload"
+            return False, "Missing or invalid 'netuid' in payload"
 
         # Compose extrinsic
         try:
@@ -181,7 +246,6 @@ class AutoStaker:
                     )
                 )
                 if staking_response is True:
-                    
                     await self.refresh_balance()
                     bt.logging.success(
                         "✅ Stake succeeded: |"
@@ -205,20 +269,22 @@ class AutoStaker:
         Process one logical staking signal.
         Return True on success (for the caller to commit), False otherwise.
 
-        We purposely return True also when we *skip* old/future/invalid events,
+        We return True also when we *skip* old/future/invalid events,
         so the consumer can commit and move on (no poison pills).
         """
-        # Validate block early — if invalid/old/future, skip before any heavy work
+        # 1) Validate 'block' early
         event_block = self._parse_block_from_payload(payload)
         if event_block is None:
             bt.logging.warning(f"Skipping payload with invalid 'block': {payload}")
             return True
 
+        # 2) Current block required
         current_block = await self._ensure_current_block()
         if current_block is None:
             bt.logging.warning("Skipping payload: current block unknown")
             return True
 
+        # 3) Drop too-old events
         if self._is_event_too_old(event_block, current_block):
             age = current_block - event_block
             bt.logging.info(
@@ -227,11 +293,37 @@ class AutoStaker:
             )
             return True
 
+        # 4) Throttle per-netuid using Redis cache of last successful trade
+        netuid = self._parse_netuid_from_payload(payload)
+        if netuid is None:
+            bt.logging.warning(f"Skipping payload with invalid 'netuid': {payload}")
+            return True
+
+        last_success_block = await self._last_success_block_for_netuid(netuid)
+        if (
+            last_success_block is not None
+            and (current_block - last_success_block) < self.min_spacing_in_blocks
+        ):
+            wait_blocks = self.min_spacing_in_blocks - (
+                current_block - last_success_block
+            )
+            bt.logging.info(
+                f"⏭️  Skipping event due to spacing window: "
+                f"netuid={netuid} last_success={last_success_block} "
+                f"current={current_block} window={self.min_spacing_in_blocks} "
+                f"(wait ~{wait_blocks} more blocks)"
+            )
+            return True
+
+        # 5) Execute
         bt.logging.info(
             f"📢 Execute trade for: {json.dumps(payload, ensure_ascii=False)}"
         )
         ok, err = await self.execute_trade(payload)
         if ok:
+            # 6) Persist success to Redis: per-wallet JSON map {netuid: payload}
+            await self._redis_save_payload(netuid, payload)
             return True
+
         bt.logging.error(f"❌ Trade execution failed: {err} | payload={payload}")
         return True
