@@ -3,6 +3,7 @@ import os
 import websockets
 import time
 from bittensor.core.async_subtensor import get_async_subtensor
+from bittensor.core.config import Config
 import asyncio
 import bittensor as bt
 
@@ -16,10 +17,20 @@ async def main():
     Main entry point: configure logging, connect to subtensor, and start monitoring.
     """
     configure_logging()
+
     ENDPOINT = os.getenv(
-        "subtensor_ENDPOINT", "wss://entrypoint-finney.opentensor.ai:443"
+        "subtensor_ENDPOINT",
+        "ws://205.172.59.24:9944",
     )
-    subtensor = await get_async_subtensor(network=ENDPOINT, log_verbose=True)
+    cfg = Config()
+    cfg.fallback_endpoints = ["wss://entrypoint-finney.opentensor.ai:443"]
+    cfg.websocket_shutdown_timer = 20.0
+
+    subtensor = await get_async_subtensor(
+        network=ENDPOINT,
+        config=cfg,
+        log_verbose=True,
+    )
 
     KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9093")
     KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "signal")

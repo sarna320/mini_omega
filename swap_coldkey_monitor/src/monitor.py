@@ -2,7 +2,6 @@ import json
 import asyncio
 import bittensor as bt
 from bittensor.core.async_subtensor import AsyncSubtensor
-from bittensor.core.async_subtensor import get_async_subtensor
 from typing import Optional
 from bittensor import DynamicInfo
 
@@ -35,13 +34,13 @@ class SwapColdkeyMonitor:
         coldkey = data.get("address", "not found")
 
         netuid = None
-        # for subnet in self.subnets:
-        #     if subnet.owner_coldkey == subnet:
-        #         netuid = subnet.netuid
-        #         break
-        # if netuid is None:
-        #     bt.logging.warning(f"Not found subnet for extrinsic: {data}")
-        #     return
+        for subnet in self.subnets:
+            if subnet.owner_coldkey == coldkey:
+                netuid = subnet.netuid
+                break
+        if netuid is None:
+            bt.logging.warning(f"Not found subnet for extrinsic: {data}")
+            return
 
         for p in parsed:
             type_ext = p.get("type", "unknow")

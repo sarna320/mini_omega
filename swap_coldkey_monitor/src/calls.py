@@ -4,5 +4,4 @@ ACCEPTABLE_CALLS = [
     "force_batch",
     "proxy",
     "schedule_swap_coldkey",
-    "add_stake_limit",
 ]
