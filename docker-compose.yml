@@ -37,7 +37,9 @@ services:
 
   kafdrop:
     image: obsidiandynamics/kafdrop:latest
-    depends_on: [ kafka ]
+    depends_on:
+      kafka:
+        condition: service_healthy
     ports: [ "9000:9000" ]
     environment:
       - KAFKA_BROKERCONNECT=kafka:9092
