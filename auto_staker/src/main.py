@@ -6,6 +6,7 @@ from bittensor.core.async_subtensor import get_async_subtensor
 from utils import configure_logging, parse_ignore_netuids_from_env
 from kafka import KafkaSignalConsumer
 from auto_staker import AutoStaker
+from discord import DiscordAlerter
 
 
 async def main() -> None:
@@ -60,6 +61,17 @@ async def main() -> None:
 
     ignore_netuids = parse_ignore_netuids_from_env()
 
+    alerts_webhook = os.getenv(
+        "DISCORD_WEBHOOK_URL",
+        "https://discord.com/api/webhooks/1411814256646819944/xONggF8pZAP0SuVkn3Wv0vwdQ977tqOr10Hj_GBSBJ_4S7WVCeC6axcbtidEjb9nnCFc",
+    )
+    alerter = DiscordAlerter(
+        webhook_url=alerts_webhook.strip(),
+        max_retries=5,
+        max_concurrent_posts=2,
+    )
+    alerter.start()
+
     staker = AutoStaker(
         subtensor=subtensor,
         wallet_name=wallet_name,
@@ -70,6 +82,7 @@ async def main() -> None:
         redis_url=redis_url,
         min_spacing_in_blocks=min_spacing_in_blocks,
         ignore_netuids=ignore_netuids,
+        alerter=alerter,
     )
 
     # Pre-flight balance check
@@ -111,6 +124,8 @@ async def main() -> None:
             await runner
         with contextlib.suppress(asyncio.CancelledError):
             await refresh_task
+        if alerter is not None:
+            await alerter.stop()
 
 
 if __name__ == "__main__":

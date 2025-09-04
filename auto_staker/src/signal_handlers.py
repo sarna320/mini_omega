@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 import bittensor as bt
 
+# NEW: import embed builder for skip notifications
+from discord import build_skip_embed, DiscordAlerter
+
 
 def event_type(payload: Dict[str, Any]) -> Optional[str]:
     """Extract event type from payload ('type' or 'event')."""
@@ -106,15 +109,20 @@ class EventSignalRouter(SignalHandler):
     """
     Dispatch to per-event handlers using payload['type'] / ['event'].
     If there is no specific handler, 'default_handler' is used (reject by default).
+
+    If notifier is set, a Discord embed is sent whenever a signal is rejected,
+    containing a concise reason.
     """
 
     def __init__(
         self,
         handlers: Dict[str, SignalHandler],
         default_handler: Optional[SignalHandler] = None,
+        notifier: Optional[DiscordAlerter] = None,  # NEW
     ) -> None:
         self._handlers = dict(handlers)
         self._default = default_handler or RejectAllHandler()
+        self._notifier = notifier
 
     def accepts(self, payload: Dict[str, Any]) -> bool:
         evt = event_type(payload) or ""
@@ -127,13 +135,24 @@ class EventSignalRouter(SignalHandler):
 
         if not ok:
             reason = _rejection_reason(evt, handler, payload)
-            # Log with a clear skip marker and concise reason
             bt.logging.info(f"⏭️  Skipped by policy: event={evt!r} — {reason}")
+            if self._notifier:
+                try:
+                    self._notifier.notify(
+                        build_skip_embed(
+                            source="router",
+                            event=evt,
+                            reason=reason,
+                            payload=payload,
+                        )
+                    )
+                except Exception as ne:
+                    bt.logging.warning(f"discord notify failed (router): {ne!r}")
 
         return ok
 
 
-def make_default_router() -> EventSignalRouter:
+def make_default_router(notifier: Optional[DiscordAlerter] = None) -> EventSignalRouter:
     """Factory for the policy you described."""
     return EventSignalRouter(
         handlers={
@@ -143,4 +162,5 @@ def make_default_router() -> EventSignalRouter:
             "changed_subnet": ChangedSubnetHandler(),
         },
         default_handler=RejectAllHandler(),
+        notifier=notifier,
     )

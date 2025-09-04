@@ -6,6 +6,12 @@ import bittensor as bt
 import redis.asyncio as aioredis
 
 from signal_handlers import SignalHandler, make_default_router
+from discord import (
+    DiscordAlerter,
+    build_skip_embed,
+    build_stake_success_embed,
+    build_stake_failure_embed,
+)
 
 
 class AutoStaker:
@@ -34,6 +40,7 @@ class AutoStaker:
         min_spacing_in_blocks: int = 50,
         ignore_netuids: Optional[set[int]] = None,
         signal_handler: Optional[SignalHandler] = None,
+        alerter: DiscordAlerter = None,
     ) -> None:
         self.subtensor = subtensor
         self.test_mode = test_mode
@@ -75,8 +82,10 @@ class AutoStaker:
             bt.logging.debug("Redis not configured; caching disabled.")
 
         self.ignore_netuids: set[int] = ignore_netuids or set()
-
-        self.signal_handler: SignalHandler = signal_handler or make_default_router()
+        self.alerter: DiscordAlerter = alerter
+        self.signal_handler: SignalHandler = signal_handler or make_default_router(
+            notifier=self.alerter
+        )
 
         bt.logging.info(
             "AutoStaker config: "
@@ -89,6 +98,15 @@ class AutoStaker:
             f"redis={'on' if self.redis else 'off'}, "
             f"ignore_netuids={sorted(self.ignore_netuids) if self.ignore_netuids else []}"
         )
+
+    def _emit_alert(self, payload: Dict[str, Any]) -> None:
+        """Enqueue alert to Discord in background (best-effort)."""
+        if not self.alerter:
+            return
+        try:
+            self.alerter.notify(payload)
+        except Exception as e:
+            bt.logging.warning(f"discord notify enqueue failed: {e!r}")
 
     def _redis_key(self) -> str:
         """Redis key scoped by wallet coldkey ss58 address."""
@@ -348,7 +366,7 @@ class AutoStaker:
         so the consumer can commit and move on (no poison pills).
         """
         # 0) Event-level acceptance policy
-        evt_type = payload.get("type")
+        evt_type = payload.get("type") or payload.get("event")
         if not self.signal_handler.accepts(payload):
             return True
 
@@ -356,32 +374,77 @@ class AutoStaker:
         event_block = self._parse_block_from_payload(payload)
         if event_block is None:
             bt.logging.warning(f"Skipping payload with invalid 'block': {payload}")
+            reason = "invalid 'block' (missing or not an int)"
+            self._emit_alert(
+                build_skip_embed(
+                    source="staker",
+                    event=str(evt_type),
+                    reason=reason,
+                    payload=payload,
+                )
+            )
             return True
 
         # 2) Current block required
         current_block = await self._ensure_current_block()
         if current_block is None:
+            reason = "current block unknown"
             bt.logging.warning("Skipping payload: current block unknown")
+            self._emit_alert(
+                build_skip_embed(
+                    source="staker",
+                    event=str(evt_type),
+                    reason=reason,
+                    payload=payload,
+                )
+            )
             return True
 
         # 3) Drop too-old events
         if self._is_event_too_old(event_block, current_block):
             age = current_block - event_block
-            bt.logging.info(
-                f"⏭️  Skipping old event: age={age} (event={event_block}, "
+            reason = (
+                f"too old: age={age} (event={event_block}, "
                 f"current={current_block}, max_delay={self.max_delay_in_blocks})"
+            )
+            bt.logging.info(f"⏭️  Skipping old event: {reason}")
+            self._emit_alert(
+                build_skip_embed(
+                    source="staker",
+                    event=str(evt_type),
+                    reason=reason,
+                    payload=payload,
+                )
             )
             return True
 
         # 4) Throttle per-netuid using Redis cache of last successful trade
         netuid = self._parse_netuid_from_payload(payload)
         if netuid is None:
+            reason = "invalid 'netuid' (missing or not an int)"
             bt.logging.warning(f"Skipping payload with invalid 'netuid': {payload}")
+            self._emit_alert(
+                build_skip_embed(
+                    source="staker",
+                    event=str(evt_type),
+                    reason=reason,
+                    payload=payload,
+                )
+            )
             return True
 
         # 5) Check if accepted netuid
         if self._should_ignore(netuid):
+            reason = f"netuid={netuid} is in ignore list"
             bt.logging.info(f"⏭️ Skipping ignored netuid={netuid}")
+            self._emit_alert(
+                build_skip_embed(
+                    source="staker",
+                    event=str(evt_type),
+                    reason=reason,
+                    payload=payload,
+                )
+            )
             return True
 
         last_success_block = await self._last_success_block_for_netuid(netuid)
@@ -392,11 +455,20 @@ class AutoStaker:
             wait_blocks = self.min_spacing_in_blocks - (
                 current_block - last_success_block
             )
-            bt.logging.info(
-                f"⏭️  Skipping event due to spacing window: "
-                f"netuid={netuid} last_success={last_success_block} "
-                f"current={current_block} window={self.min_spacing_in_blocks} "
-                f"(wait ~{wait_blocks} more blocks)"
+            reason = (
+                "spacing window active: "
+                f"netuid={netuid}, last_success={last_success_block}, "
+                f"current={current_block}, window={self.min_spacing_in_blocks}, "
+                f"wait≈{wait_blocks} blocks"
+            )
+            bt.logging.info(f"⏭️  Skipping event due to spacing window: {reason}")
+            self._emit_alert(
+                build_skip_embed(
+                    source="staker",
+                    event=str(evt_type),
+                    reason=reason,
+                    payload=payload,
+                )
             )
             return True
 
@@ -406,9 +478,39 @@ class AutoStaker:
         )
         ok, err = await self.execute_trade(payload)
         if ok:
-            # 6) Persist success to Redis: per-wallet JSON map {netuid: payload}
+            try:
+                # Send success alert with key details
+                amount_tao = float(self.balance_to_stake.tao)
+                new_bal = float(self.balance.tao)
+                self._emit_alert(
+                    build_stake_success_embed(
+                        netuid=int(netuid),
+                        amount_tao=amount_tao,
+                        wallet_coldkey=self.wallet.coldkey.ss58_address,
+                        hotkey=self.hotkey_to_stake,
+                        new_balance_tao=new_bal,
+                        payload=payload,
+                    )
+                )
+            except Exception as e:
+                bt.logging.warning(f"discord success alert build failed: {e!r}")
+
+            # Persist success to Redis: per-wallet JSON map {netuid: payload}
             await self._redis_save_payload(netuid, payload)
             return True
 
         bt.logging.error(f"❌ Trade execution failed: {err} | payload={payload}")
+        try:
+            self._emit_alert(
+                build_stake_failure_embed(
+                    netuid=netuid if isinstance(netuid, int) else None,
+                    amount_tao=float(self.balance_to_stake.tao),
+                    wallet_coldkey=self.wallet.coldkey.ss58_address,
+                    hotkey=self.hotkey_to_stake,
+                    error=str(err) if err is not None else "unknown error",
+                    payload=payload,
+                )
+            )
+        except Exception as ne:
+            bt.logging.warning(f"discord failure alert build/enqueue failed: {ne!r}")
         return True
