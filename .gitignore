@@ -4,3 +4,4 @@ __pycache__
 all
 *.egg-info
 logs
+.env

@@ -25,7 +25,7 @@ async def main():
       - TEST_MODE (default: True) -> if True, only logs the Discord payload
     """
     configure_logging()
-    bootstrap = os.getenv("KAFKA_BOOTSTRAP", "localhost:9093")
+    bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9093")
     topic = os.getenv("KAFKA_TOPIC", "signal")
     group_id = os.getenv("KAFKA_GROUP_ID", "discord")
     webhook = os.getenv("DISCORD_WEBHOOK_URL", "")

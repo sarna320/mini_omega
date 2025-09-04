@@ -39,7 +39,7 @@ async def main() -> None:
         log_verbose=True,
     )
 
-    bootstrap = os.getenv("KAFKA_BOOTSTRAP", "localhost:9093")
+    bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9093")
     topic = os.getenv("KAFKA_TOPIC", "signal")
 
     wallet_name = os.getenv("WALLET_NAME", "trader")
@@ -88,11 +88,12 @@ async def main() -> None:
     # Pre-flight balance check
     await staker.ensure_min_balance()
 
+    client_id = f"auto-staker-{wallet_name}"
     consumer = KafkaSignalConsumer(
         bootstrap_servers=bootstrap,
         topic=topic,
         group_id=group_id,
-        client_id="auto-staker",
+        client_id=client_id,
         ensure_offsets_topic=True,
         offsets_partitions=50,
     )

@@ -11,8 +11,8 @@ services:
     image: bitnami/kafka:3.7
     depends_on: [ zookeeper ]
     ports:
-      - "9092:9092" # INTERNAL (dla kontenerów)
-      - "9093:9093" # EXTERNAL (dla hosta)
+      - "9092:9092" # INTERNAL
+      - "9093:9093" # EXTERNAL
     environment:
       - KAFKA_BROKER_ID=1
       - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
@@ -42,7 +42,7 @@ services:
         condition: service_healthy
     ports: [ "9000:9000" ]
     environment:
-      - KAFKA_BROKERCONNECT=kafka:9092
+      - KAFKA_BROKERCONNECT=${KAFKA_BROKERCONNECT}
       - JVM_OPTS=-Xms128m -Xmx512m
     restart: unless-stopped
 
@@ -55,10 +55,10 @@ services:
       kafka:
         condition: service_healthy
     environment:
-      - SUBTENSOR_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - KAFKA_TOPIC=signal
-      - KAFKA_PARTITIONING=signal
+      - SUBTENSOR_ENDPOINT=${SUBTENSOR_ENDPOINT}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+      - KAFKA_TOPIC=${KAFKA_TOPIC}
+      - KAFKA_PARTITIONING=${KAFKA_PARTITIONING}
       - PYTHONUNBUFFERED=1
     init: true
     restart: always
@@ -72,10 +72,9 @@ services:
       kafka:
         condition: service_healthy
     environment:
-      - KAFKA_BOOTSTRAP=kafka:9092
-      - KAFKA_TOPIC=signal
-      - KAFKA_GROUP_ID=discord
-      - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1411814256646819944/xONggF8pZAP0SuVkn3Wv0vwdQ977tqOr10Hj_GBSBJ_4S7WVCeC6axcbtidEjb9nnCFc
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+      - KAFKA_TOPIC=${KAFKA_TOPIC}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - PYTHONUNBUFFERED=1
       - TEST_MODE=False
     init: true
@@ -90,19 +89,54 @@ services:
       kafka:
         condition: service_healthy
     environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - KAFKA_TOPIC=signal
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+      - KAFKA_TOPIC=${KAFKA_TOPIC}
       - PYTHONUNBUFFERED=1
-      - SUBTENSOR_ENDPOINT=wss://entrypoint-finney.opentensor.ai:443
+      - SUBTENSOR_ENDPOINT=${SUBTENSOR_ENDPOINT}
     init: true
     restart: always
-  
+
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    ports: ["6379:6379"]
-    volumes: ["redis_data:/data"]
+    command: [ "redis-server", "--appendonly", "yes" ]
+    ports: [ "6379:6379" ]
+    volumes: [ "redis_data:/data" ]
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ] # returns "PONG" on success
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
     restart: unless-stopped
+
+  auto-staker:
+    build:
+      context: auto_staker
+      dockerfile: Dockerfile
+    image: auto-staker:latest
+    depends_on:
+      kafka:
+        condition: service_healthy
+    redis:
+      condition: service_healthy
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+      - KAFKA_TOPIC=${KAFKA_TOPIC}
+      - WALLET_NAME=${WALLET_NAME}
+      - HOTKEY_TO_STAKE=${HOTKEY_TO_STAKE}
+      - BALANCE_TO_STAKE=${BALANCE_TO_STAKE}
+      - MAX_DELAY_IN_BLOCKS=${MAX_DELAY_IN_BLOCKS}
+      - MIN_SPACING_IN_BLOCKS=${MIN_SPACING_IN_BLOCKS}
+      - IGNORE_NETUIDS=${IGNORE_NETUIDS}
+      - TEST_MODE=False
+      - SUBTENSOR_ENDPOINT=${SUBTENSOR_ENDPOINT}
+      - REDIS_URL=${REDIS_URL}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - REFRESH_INTERVAL_S=${REFRESH_INTERVAL_S}
+    # Only read acces volume
+    volumes:
+      - ${HOME}/.bittensor/wallets/${WALLET_NAME}:/root/.bittensor/wallets/${WALLET_NAME}:ro
+    restart: always
 
 volumes:
   zookeeper_data:
