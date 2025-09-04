@@ -154,7 +154,7 @@ async def main() -> None:
     )
     await producer.start()
     try:
-        messages = build_messages(6365170)
+        messages = build_messages(7365170)
         for msg in messages:
             # Build per-message key to mirror your monitor conventions
             evt = msg.get("type")

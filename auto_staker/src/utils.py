@@ -1,7 +1,51 @@
 import os
-from typing import List
+from typing import List, Set
 import pathlib
 import bittensor as bt
+
+
+def parse_ignore_netuids_from_env(env_var: str = "IGNORE_NETUIDS") -> Set[int]:
+    """
+    Parse a comma-separated list of netuids from an environment variable and return a set[int].
+
+    Example:
+        IGNORE_NETUIDS="1, 2, 42"  ->  {1, 2, 42}
+
+    Behavior:
+    - Trims whitespace around tokens.
+    - Skips empty tokens.
+    - Logs a warning for invalid (non-integer) or negative tokens.
+    - Logs info with the final, sorted list when non-empty.
+
+    Args:
+        env_var: Environment variable name to read from. Defaults to "IGNORE_NETUIDS".
+
+    Returns:
+        A set of valid, non-negative netuids.
+    """
+    raw = os.getenv(env_var, "").strip()
+    result: Set[int] = set()
+
+    if not raw:
+        return result
+
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            val = int(tok)
+            if val < 0:
+                bt.logging.warning(f"{env_var}: negative netuid '{tok}' skipped")
+                continue
+            result.add(val)
+        except ValueError:
+            bt.logging.warning(f"{env_var}: invalid netuid '{tok}' skipped")
+
+    if result:
+        bt.logging.info(f"Ignore list active for netuids: {sorted(result)}")
+
+    return result
 
 
 def parse_bootstrap(bootstrap: str) -> List[str]:

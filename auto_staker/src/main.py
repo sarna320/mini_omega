@@ -3,7 +3,7 @@ import asyncio
 import contextlib
 from bittensor.core.async_subtensor import get_async_subtensor
 
-from utils import configure_logging
+from utils import configure_logging, parse_ignore_netuids_from_env
 from kafka import KafkaSignalConsumer
 from auto_staker import AutoStaker
 
@@ -50,13 +50,15 @@ async def main() -> None:
     hotkey_to_stake = os.getenv(
         "HOTKEY_TO_STAKE", "5E2LP6EnZ54m3wS8s1yPvD5c3xo71kQroBw7aUVK32TKeZ5u"
     )
-    balance_to_stake_tao = float(os.getenv("BALANCE_TO_STAKE", "0.1"))
+    balance_to_stake_tao = float(os.getenv("BALANCE_TO_STAKE", "0.05"))
     refresh_interval_s = float(os.getenv("REFRESH_INTERVAL_S", "12.0"))
     max_delay_in_blocks = int(os.getenv("MAX_DELAY_IN_BLOCKS", "10"))
 
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     min_spacing_in_blocks = int(os.getenv("MIN_SPACING_IN_BLOCKS", "7200"))
+
+    ignore_netuids = parse_ignore_netuids_from_env()
 
     staker = AutoStaker(
         subtensor=subtensor,
@@ -67,6 +69,7 @@ async def main() -> None:
         max_delay_in_blocks=max_delay_in_blocks,
         redis_url=redis_url,
         min_spacing_in_blocks=min_spacing_in_blocks,
+        ignore_netuids=ignore_netuids,
     )
 
     # Pre-flight balance check
