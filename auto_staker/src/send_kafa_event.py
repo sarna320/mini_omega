@@ -113,6 +113,10 @@ def build_messages(base_block: int = 1_000) -> List[Dict[str, Any]]:
         "timestamp": ts,
         "block": base_block + 4,
         "fields": {
+            "subnet_name": {
+                "old": "test_subnet_0",
+                "new": "test_subnet_0_new",
+            },
             "subnet_contact": {
                 "old": "devs@manifold.inc",
                 "new": "support@manifold.inc",

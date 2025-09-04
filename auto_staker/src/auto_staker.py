@@ -5,6 +5,8 @@ from bittensor.core.async_subtensor import AsyncSubtensor
 import bittensor as bt
 import redis.asyncio as aioredis
 
+from signal_handlers import SignalHandler, make_default_router
+
 
 class AutoStaker:
     """
@@ -31,6 +33,7 @@ class AutoStaker:
         redis_url: Optional[str] = None,
         min_spacing_in_blocks: int = 50,
         ignore_netuids: Optional[set[int]] = None,
+        signal_handler: Optional[SignalHandler] = None,
     ) -> None:
         self.subtensor = subtensor
         self.test_mode = test_mode
@@ -72,6 +75,8 @@ class AutoStaker:
             bt.logging.debug("Redis not configured; caching disabled.")
 
         self.ignore_netuids: set[int] = ignore_netuids or set()
+
+        self.signal_handler: SignalHandler = signal_handler or make_default_router()
 
         bt.logging.info(
             "AutoStaker config: "
@@ -342,6 +347,11 @@ class AutoStaker:
         We return True also when we *skip* old/future/invalid events,
         so the consumer can commit and move on (no poison pills).
         """
+        # 0) Event-level acceptance policy
+        evt_type = payload.get("type")
+        if not self.signal_handler.accepts(payload):
+            return True
+
         # 1) Validate 'block' early
         event_block = self._parse_block_from_payload(payload)
         if event_block is None:
@@ -369,6 +379,7 @@ class AutoStaker:
             bt.logging.warning(f"Skipping payload with invalid 'netuid': {payload}")
             return True
 
+        # 5) Check if accepted netuid
         if self._should_ignore(netuid):
             bt.logging.info(f"⏭️ Skipping ignored netuid={netuid}")
             return True
