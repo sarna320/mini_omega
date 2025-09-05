@@ -10,7 +10,7 @@ services:
   kafka:
     image: bitnami/kafka:3.7
     depends_on: [ zookeeper ]
-    ports:
+    # ports:
       # - "9092:9092" # INTERNAL
       # - "9093:9093" # EXTERNAL
     environment:
@@ -40,7 +40,7 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    ports: [ "9000:9000" ]
+    # ports: [ "9000:9000" ]
     environment:
       - KAFKA_BROKERCONNECT=${KAFKA_BROKERCONNECT}
       - JVM_OPTS=-Xms128m -Xmx512m
