@@ -81,8 +81,6 @@ class SwapColdkeyMonitor:
 
     async def handle_extrinsics(self, extrinsics):
         if not extrinsics:
-            # Still refresh subnets even if the block had no extrinsics
-            await self.refresh_subnet()
             return
 
         tasks = [
