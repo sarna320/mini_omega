@@ -46,8 +46,6 @@ async def main() -> None:
     if not wallet_name:
         raise RuntimeError("WALLET_NAME is required")
 
-    group_id = wallet_name
-
     hotkey_to_stake = os.getenv(
         "HOTKEY_TO_STAKE", "5E2LP6EnZ54m3wS8s1yPvD5c3xo71kQroBw7aUVK32TKeZ5u"
     )
@@ -88,7 +86,8 @@ async def main() -> None:
     # Pre-flight balance check
     await staker.ensure_min_balance()
 
-    client_id = f"auto-staker-{wallet_name}"
+    client_id = f"auto-staker-{staker.wallet.coldkey.ss58_address}"
+    group_id = client_id
     consumer = KafkaSignalConsumer(
         bootstrap_servers=bootstrap,
         topic=topic,
