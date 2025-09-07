@@ -41,6 +41,8 @@ class AutoStaker:
         ignore_netuids: Optional[set[int]] = None,
         signal_handler: Optional[SignalHandler] = None,
         alerter: DiscordAlerter = None,
+        fee_buffer_multiplier_x: int = 10,
+        fee_reference_destination_netuid: int = 1,
     ) -> None:
         self.subtensor = subtensor
         self.test_mode = test_mode
@@ -87,6 +89,9 @@ class AutoStaker:
             notifier=self.alerter
         )
 
+        self.fee_buffer_multiplier_x = int(fee_buffer_multiplier_x)
+        self.fee_reference_destination_netuid = int(fee_reference_destination_netuid)
+
         bt.logging.info(
             "AutoStaker config: "
             f"wallet={self.wallet.name} ({self.wallet.coldkey.ss58_address}), "
@@ -97,6 +102,8 @@ class AutoStaker:
             f"min_spacing={self.min_spacing_in_blocks} blocks, "
             f"redis={'on' if self.redis else 'off'}, "
             f"ignore_netuids={sorted(self.ignore_netuids) if self.ignore_netuids else []}"
+            f"fee_buffer_x={self.fee_buffer_multiplier_x}, "
+            f"fee_ref_dest_netuid={self.fee_reference_destination_netuid}"
         )
 
     def _emit_alert(self, payload: Dict[str, Any]) -> None:
@@ -167,16 +174,6 @@ class AutoStaker:
             bt.logging.warning(f"current block fetch failed: {e!r}")
             return None
 
-    async def ensure_min_balance(self) -> None:
-        """Ensure we have enough balance to run the staker at all."""
-        await self.refresh_balance()
-        bt.logging.info(f"💰 Current balance: {self.balance.tao}")
-        if self.balance.tao < self.min_required_tao.tao:
-            raise RuntimeError(
-                f"Too low balance to start autostaker. At least {self.min_required_tao} TAO is required "
-                f"(have {self.balance.tao:.6f})."
-            )
-
     async def _run_refreshers_once(self) -> None:
         """Run the built-in balance refresh and current block fetch concurrently."""
         try:
@@ -187,6 +184,147 @@ class AutoStaker:
             raise
         except Exception as e:
             bt.logging.warning(f"refresh tick failed: {e!r}")
+
+    async def stake_all_on_root_minus_x_fees(
+        self, x: int = 10
+    ) -> Tuple[bool, str | None]:
+        """
+        Stake all free TAO into netuid=0, leaving a liquid buffer ~= x * fee_unit.
+        """
+        try:
+            fee_unit = await self.get_fee_unit()  # proxy fee
+            tao_to_leave = fee_unit * x
+            await self.refresh_balance()
+            tao_to_stake = self.balance - tao_to_leave
+
+            # Skip tiny amounts
+            if tao_to_stake.tao <= 0:
+                bt.logging.info("Nothing to stake on start (buffer >= balance).")
+                return True, None
+            if tao_to_stake.tao < 0.1:
+                bt.logging.info("Skipping very small add_stake (<0.1 TAO).")
+                return True, None
+
+            call = await self.subtensor.substrate.compose_call(
+                call_module="SubtensorModule",
+                call_function="add_stake",
+                call_params={
+                    "hotkey": self.hotkey_to_stake,
+                    "netuid": 0,
+                    "amount_staked": tao_to_stake.rao,
+                },
+            )
+
+            resp, err_msg = await self.subtensor.sign_and_send_extrinsic(
+                call=call,
+                wallet=self.wallet,
+                wait_for_inclusion=True,
+                wait_for_finalization=False,
+                nonce_key="coldkeypub",
+                sign_with="coldkey",
+                use_nonce=True,
+                period=None,
+            )
+            if resp is True:
+                await self.refresh_balance()
+                bt.logging.success(
+                    f"✅ Startup add_stake ok | staked={float(tao_to_stake.tao):.6f} TAO | left≈{float(tao_to_leave.tao):.6f} TAO"
+                )
+                return True, None
+            return False, f"add_stake returned False: {err_msg}"
+        except Exception as e:
+            return False, f"startup stake failed: {e!r}"
+
+    async def _unstake_from_root_for_fees(
+        self, deficit: bt.Balance
+    ) -> Tuple[bool, str | None]:
+        """
+        Unstake 'deficit' from netuid=0 back to coldkey to refill the liquid fee buffer.
+        """
+        try:
+            call = await self.subtensor.substrate.compose_call(
+                call_module="SubtensorModule",
+                call_function="remove_stake",
+                call_params={
+                    "hotkey": self.hotkey_to_stake,
+                    "netuid": 0,
+                    "amount_unstaked": deficit.rao,
+                },
+            )
+            resp, err_msg = await self.subtensor.sign_and_send_extrinsic(
+                call=call,
+                wallet=self.wallet,
+                wait_for_inclusion=True,
+                wait_for_finalization=False,
+                nonce_key="coldkeypub",
+                sign_with="coldkey",
+                use_nonce=True,
+                period=None,
+            )
+            if resp is True:
+                await self.refresh_balance()
+                bt.logging.success(f"♻️  Unstaked {deficit} from netuid=0.")
+                return True, None
+            return False, f"remove_stake returned False: {err_msg}"
+        except Exception as e:
+            return False, f"remove_stake failed: {e!r}"
+
+    async def get_fee_unit(
+        self,
+        *,
+        destination_netuid: Optional[int] = None,
+        amount: Optional[bt.Balance] = None,
+    ) -> bt.Balance:
+        """
+        Conservative 'unit fee' used for buffer sizing and top-ups.
+        We reuse staking.get_stake_movement_fee (cross-subnet % fee + tx fee) as a proxy.
+        If it fails for any reason, fall back to 0.001 TAO.
+        """
+        dest = (
+            self.fee_reference_destination_netuid
+            if destination_netuid is None
+            else int(destination_netuid)
+        )
+        amt = amount if amount is not None else self.balance_to_stake
+        try:
+            origin_coldkey_ss58 = self.wallet.coldkey.ss58_address
+            fee = await self.subtensor.get_stake_movement_fee(
+                amount=amt,
+                origin_netuid=0,
+                origin_hotkey_ss58=self.hotkey_to_stake,
+                origin_coldkey_ss58=origin_coldkey_ss58,
+                destination_netuid=dest,
+                destination_hotkey_ss58=self.hotkey_to_stake,
+                destination_coldkey_ss58=origin_coldkey_ss58,
+            )
+            # Ensure Balance type
+            return (
+                fee if isinstance(fee, bt.Balance) else bt.Balance.from_tao(float(fee))
+            )
+        except Exception as e:
+            bt.logging.warning(f"fee estimator failed, using fallback: {e!r}")
+            return bt.Balance.from_tao(0.001)  # fallback
+
+    async def _maybe_top_up_fee_buffer(self, reference_netuid: int) -> None:
+        """
+        Ensure liquid balance >= fee_buffer_multiplier_x * fee_unit.
+        If not, unstake the deficit from netuid=0.
+        """
+        try:
+            fee_unit = await self.get_fee_unit(destination_netuid=reference_netuid)
+            await self.refresh_balance()
+            if self.balance >= fee_unit + bt.Balance(0.00001):
+                return  # already enough
+
+            deficit = bt.Balance(fee_unit * self.fee_buffer_multiplier_x - self.balance)
+            # ignore dust
+            if deficit.tao < 0.0005:
+                return
+            ok, err = await self._unstake_from_root_for_fees(deficit)
+            if not ok:
+                bt.logging.warning(f"Fee-buffer top-up failed: {err}")
+        except Exception as e:
+            bt.logging.warning(f"Fee-buffer check failed: {e!r}")
 
     async def periodic_refresh_loop(
         self,
@@ -284,11 +422,12 @@ class AutoStaker:
         try:
             call = await self.subtensor.substrate.compose_call(
                 call_module="SubtensorModule",
-                call_function="add_stake",
+                call_function="swap_stake",
                 call_params={
                     "hotkey": self.hotkey_to_stake,
-                    "netuid": netuid,
-                    "amount_staked": amount_rao,
+                    "origin_netuid": 0,
+                    "destination_netuid": netuid,
+                    "alpha_amount": amount_rao,
                 },
             )
         except Exception as e:
@@ -318,6 +457,7 @@ class AutoStaker:
                         f"netuid={netuid} | amount={amount_tao} TAO | "
                         f"balance={self.balance.tao} TAO"
                     )
+                    await self._maybe_top_up_fee_buffer(reference_netuid=netuid)
                     return True, None
 
                 last_err = f"staking returned False: {err_msg}"
@@ -340,6 +480,7 @@ class AutoStaker:
                         f"netuid={netuid} | amount={amount_tao} TAO | spent≈{spent_tao} TAO | "
                         f"balance={self.balance.tao} TAO"
                     )
+                    await self._maybe_top_up_fee_buffer(reference_netuid=netuid)
                     return True, None
 
                 # Not enough delta → next attempt. Update baseline to the latest balance.

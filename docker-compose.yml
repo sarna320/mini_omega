@@ -10,9 +10,9 @@ services:
   kafka:
     image: bitnami/kafka:3.7
     depends_on: [ zookeeper ]
-    # ports:
+    ports:
       # - "9092:9092" # INTERNAL
-      # - "9093:9093" # EXTERNAL
+      - "9093:9093" # EXTERNAL
     environment:
       - KAFKA_BROKER_ID=1
       - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
@@ -60,6 +60,8 @@ services:
       - KAFKA_TOPIC=${KAFKA_TOPIC}
       - KAFKA_PARTITIONING=${KAFKA_PARTITIONING}
       - PYTHONUNBUFFERED=1
+    volumes:
+      - swap_coldkey_monitor_logs:/app/logs
     init: true
     restart: always
 
@@ -77,6 +79,8 @@ services:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - PYTHONUNBUFFERED=1
       - TEST_MODE=False
+    volumes:
+      - discord_notifier_logs:/app/logs
     init: true
     restart: always
 
@@ -93,6 +97,8 @@ services:
       - KAFKA_TOPIC=${KAFKA_TOPIC}
       - PYTHONUNBUFFERED=1
       - SUBTENSOR_ENDPOINT=${SUBTENSOR_ENDPOINT}
+    volumes:
+      - subnet_monitor_logs:/app/logs
     init: true
     restart: always
 
@@ -136,9 +142,14 @@ services:
     # Only read acces volume
     volumes:
       - ${HOME}/.bittensor/wallets/${WALLET_NAME}:/root/.bittensor/wallets/${WALLET_NAME}:ro
+      - auto_staker_logs:/app/logs
     restart: always
 
 volumes:
   zookeeper_data:
   kafka_data:
   redis_data:
+  swap_coldkey_monitor_logs:
+  discord_notifier_logs:
+  subnet_monitor_logs:
+  auto_staker_logs:

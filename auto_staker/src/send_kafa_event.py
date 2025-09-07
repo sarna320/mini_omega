@@ -109,7 +109,7 @@ def build_messages(base_block: int = 1_000) -> List[Dict[str, Any]]:
     # }
     changed_0_two_fields = {
         "type": "changed_subnet",
-        "netuid": 0,
+        "netuid": 62,
         "timestamp": ts,
         "block": base_block + 4,
         "fields": {

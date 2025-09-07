@@ -2,6 +2,7 @@ import os
 import asyncio
 import contextlib
 from bittensor.core.async_subtensor import get_async_subtensor
+import bittensor as bt
 
 from utils import configure_logging, parse_ignore_netuids_from_env
 from kafka import KafkaSignalConsumer
@@ -83,8 +84,9 @@ async def main() -> None:
         alerter=alerter,
     )
 
-    # Pre-flight balance check
-    await staker.ensure_min_balance()
+    ok, err = await staker.stake_all_on_root_minus_x_fees(x=10)
+    if not ok:
+        bt.logging.warning(f"Startup add_stake skipped/failed: {err}")
 
     client_id = f"auto-staker-{staker.wallet.coldkey.ss58_address}"
     group_id = client_id
