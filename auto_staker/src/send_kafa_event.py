@@ -121,7 +121,7 @@ def build_messages(base_block: int = 1_000) -> List[Dict[str, Any]]:
                 "old": "devs@manifold.inc",
                 "new": "support@manifold.inc",
             },
-            "subnet_url": {
+            "description": {
                 "old": "https://www.hone.training/",
                 "new": "https://hone.training/",
             },

@@ -12,6 +12,7 @@ from discord import (
     build_stake_success_embed,
     build_stake_failure_embed,
 )
+from fast_as_fuck_stakes import submit_extrinsic, swap_stake_ext
 
 
 class AutoStaker:
@@ -420,15 +421,11 @@ class AutoStaker:
 
         # Compose extrinsic once
         try:
-            call = await self.subtensor.substrate.compose_call(
-                call_module="SubtensorModule",
-                call_function="swap_stake",
-                call_params={
-                    "hotkey": self.hotkey_to_stake,
-                    "origin_netuid": 0,
-                    "destination_netuid": netuid,
-                    "alpha_amount": amount_rao,
-                },
+            ext = await swap_stake_ext(
+                self,
+                destination_netuid=netuid,
+                amount_rao=amount_rao,
+                origin_netuid=0,
             )
         except Exception as e:
             return False, f"compose_call failed: {e!r}"
@@ -439,16 +436,11 @@ class AutoStaker:
 
         for attempt in range(1, max_retries + 1):
             try:
-                resp, err_msg = await self.subtensor.sign_and_send_extrinsic(
-                    call=call,
-                    wallet=self.wallet,
-                    wait_for_inclusion=True,
-                    wait_for_finalization=False,
-                    nonce_key="coldkeypub",
-                    sign_with="coldkey",
-                    use_nonce=True,
-                    period=None,
+                resp, err_msg = await submit_extrinsic(
+                    self,
+                    extrinsic_data=ext,
                 )
+
                 if resp is True:
                     # Confirmed by RPC
                     await self.refresh_balance()
