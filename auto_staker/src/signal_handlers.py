@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 import bittensor as bt
 
-# NEW: import embed builder for skip notifications
 from discord import build_skip_embed, DiscordAlerter
 
 
@@ -12,27 +11,32 @@ def event_type(payload: Dict[str, Any]) -> Optional[str]:
     return str(t) if t is not None else None
 
 
-def _subnet_name_changed(payload: Dict[str, Any]) -> bool:
+def _field_changed(payload: Dict[str, Any], field: str) -> bool:
     """
-    Return True only if 'subnet_name' actually changed.
+    Return True only if the specified field actually changed.
     Expected (diff) format in payload['fields']:
-      - Either {'subnet_name': {'old': 'A', 'new': 'B'}, ...}
-      - Or {'subnet_name': 'B', ...}  # treat presence as a change
+      - Either {field: {'old': 'A', 'new': 'B'}, ...}
+      - Or {field: 'B', ...}  # treat presence as a change
     """
     diff = payload.get("fields")
     if not isinstance(diff, dict):
         return False
 
-    if "subnet_name" not in diff:
+    if field not in diff:
         return False
 
-    val = diff["subnet_name"]
+    val = diff[field]
     if isinstance(val, dict):
         old_v = val.get("old")
         new_v = val.get("new")
         return old_v != new_v
     # Primitive present → consider it a change signal
     return True
+
+
+def _description_changed(payload: Dict[str, Any]) -> bool:
+    """Return True only if 'description' actually changed."""
+    return _field_changed(payload, "description")
 
 
 class SignalHandler(ABC):
@@ -72,11 +76,12 @@ class RemovedSubnetHandler(SignalHandler):
 
 class ChangedSubnetHandler(SignalHandler):
     """
-    Accept changed_subnet only if 'subnet_name' changed.
+    Accept changed_subnet only if 'description' changed.
+    (We explicitly ignore 'subnet_name' now.)
     """
 
     def accepts(self, payload: Dict[str, Any]) -> bool:
-        return _subnet_name_changed(payload)
+        return _description_changed(payload)
 
 
 def _rejection_reason(evt: str, handler: SignalHandler, payload: Dict[str, Any]) -> str:
@@ -90,11 +95,11 @@ def _rejection_reason(evt: str, handler: SignalHandler, payload: Dict[str, Any])
             diff = payload.get("fields")
             if not isinstance(diff, dict):
                 return "changed_subnet rejected: 'fields' missing or not a dict"
-            if "subnet_name" not in diff:
-                return "changed_subnet rejected: 'subnet_name' did not change"
-            val = diff["subnet_name"]
+            if "description" not in diff:
+                return "changed_subnet rejected: 'description' did not change"
+            val = diff["description"]
             if isinstance(val, dict) and val.get("old") == val.get("new"):
-                return f"changed_subnet rejected: 'subnet_name' unchanged ({val.get('old')})"
+                return f"changed_subnet rejected: 'description' unchanged ({val.get('old')})"
             # Fallback (should not hit if accepts() is correct)
             return "changed_subnet rejected by policy"
         if isinstance(handler, RejectAllHandler):
@@ -118,7 +123,7 @@ class EventSignalRouter(SignalHandler):
         self,
         handlers: Dict[str, SignalHandler],
         default_handler: Optional[SignalHandler] = None,
-        notifier: Optional[DiscordAlerter] = None,  # NEW
+        notifier: Optional[DiscordAlerter] = None,
     ) -> None:
         self._handlers = dict(handlers)
         self._default = default_handler or RejectAllHandler()
