@@ -436,9 +436,12 @@ class AutoStaker:
 
         for attempt in range(1, max_retries + 1):
             try:
-                resp, err_msg = await submit_extrinsic(
-                    self,
-                    extrinsic_data=ext,
+                resp, err_msg = await asyncio.wait_for(
+                    submit_extrinsic(
+                        self,
+                        extrinsic_data=ext,
+                    ),
+                    timeout=20,
                 )
 
                 if resp is True:
